@@ -118,30 +118,24 @@ def show_naver_map(places: list[dict]) -> None:
     center_lng = places[0]["lng"]
 
     map_html = f"""
-    <!doctype html>
-    <html lang="ko">
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
       <style>
-        html, body, #map {{ width: 100%; height: 500px; margin: 0; }}
-        #status {{
+        #naver-map {{ width: 100%; height: 500px; margin: 0; border-radius: 8px; overflow: hidden; }}
+        #naver-map-status {{
           display: none; box-sizing: border-box; height: 500px; padding: 24px;
           align-items: center; justify-content: center; text-align: center;
           font: 14px/1.55 system-ui, sans-serif; color: #444; background: #f6f7f9;
+          border-radius: 8px;
         }}
       </style>
-    </head>
-    <body>
-      <div id="map" aria-label="검색 결과 네이버 지도"></div>
-      <div id="status" role="alert"></div>
+      <div id="naver-map" role="img" aria-label="검색 결과 업체 위치를 표시하는 네이버 지도"></div>
+      <div id="naver-map-status" role="alert"></div>
       <script>
         const places = {places_json};
         const clientId = {client_id_json};
 
         function showError(message) {{
-          document.getElementById("map").style.display = "none";
-          const status = document.getElementById("status");
+          document.getElementById("naver-map").style.display = "none";
+          const status = document.getElementById("naver-map-status");
           status.style.display = "flex";
           status.textContent = message;
         }}
@@ -160,13 +154,13 @@ def show_naver_map(places: list[dict]) -> None:
           }});
         }}
 
-        function initMap() {{
+        function initNaverLocalMap() {{
           if (!window.naver || !window.naver.maps) {{
             showError("NAVER 지도 SDK를 불러오지 못했습니다.");
             return;
           }}
 
-          const map = new naver.maps.Map("map", {{
+          const map = new naver.maps.Map("naver-map", {{
             center: new naver.maps.LatLng({center_lat}, {center_lng}),
             zoom: 14
           }});
@@ -202,24 +196,29 @@ def show_naver_map(places: list[dict]) -> None:
           }}
         }}
 
-        const sdk = document.createElement("script");
-        sdk.src = "https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=" +
-          encodeURIComponent(clientId) + "&callback=initMap";
-        sdk.async = true;
-        sdk.onerror = function () {{
-          showError("NAVER 지도 SDK 연결에 실패했습니다. 네트워크와 지도 API 설정을 확인해 주세요.");
-        }};
-        document.head.appendChild(sdk);
+        if (window.naver && window.naver.maps) {{
+          initNaverLocalMap();
+        }} else {{
+          window.initNaverLocalMap = initNaverLocalMap;
+          const oldSdk = document.getElementById("naver-maps-sdk");
+          if (oldSdk) oldSdk.remove();
+          const sdk = document.createElement("script");
+          sdk.id = "naver-maps-sdk";
+          sdk.src = "https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=" +
+            encodeURIComponent(clientId) + "&callback=initNaverLocalMap";
+          sdk.async = true;
+          sdk.onerror = function () {{
+            showError("NAVER 지도 SDK 연결에 실패했습니다. 네트워크와 지도 API 설정을 확인해 주세요.");
+          }};
+          document.head.appendChild(sdk);
+        }}
       </script>
-    </body>
-    </html>
     """
 
-    st.iframe(
+    st.html(
         map_html,
-        height=520,
         width="stretch",
-        alt="검색 결과 업체 위치를 표시하는 네이버 지도",
+        unsafe_allow_javascript=True,
     )
 
 
