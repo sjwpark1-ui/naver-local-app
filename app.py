@@ -1,6 +1,5 @@
 import html
 import re
-from urllib.parse import quote
 
 import requests
 import streamlit as st
@@ -293,27 +292,17 @@ if results is not None:
             category = html.unescape(str(item.get("category", "")))
             address = item.get("roadAddress") or item.get("address") or ""
             business_link = str(item.get("link", "")).strip()
-            naver_map_link = "https://map.naver.com/p/search/" + quote(
-                f"{title} {address}".strip()
-            )
-
             with st.container(border=True):
                 st.subheader(f"{number}. {title}", anchor=False)
                 if category:
                     st.text(f"업종: {category}")
                 if address:
                     st.text(f"주소: {address}")
-                with st.container(horizontal=True):
+                if business_link.startswith(("https://", "http://")):
                     st.link_button(
-                        "네이버 지도에서 보기",
-                        naver_map_link,
-                        icon=":material/map:",
+                        "업체 홈페이지/정보",
+                        business_link,
+                        icon=":material/open_in_new:",
                     )
-                    if business_link.startswith(("https://", "http://")):
-                        st.link_button(
-                            "업체 홈페이지/정보",
-                            business_link,
-                            icon=":material/open_in_new:",
-                        )
 
 st.caption("검색 결과는 NAVER API HUB 지역검색과 NAVER Maps를 이용합니다.")
