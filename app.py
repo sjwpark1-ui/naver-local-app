@@ -1,5 +1,4 @@
 import html
-import json
 import re
 from urllib.parse import quote
 
@@ -11,6 +10,134 @@ st.set_page_config(
     page_title="NAVER 지역검색",
     page_icon=":material/location_on:",
     layout="centered",
+)
+
+
+NAVER_MAP_HTML = """
+<div class="map-root" role="img" aria-label="검색 결과 업체 위치를 표시하는 네이버 지도"></div>
+<div class="map-status" role="alert"></div>
+"""
+
+NAVER_MAP_CSS = """
+.map-root {
+  width: 100%;
+  height: 500px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.map-status {
+  display: none;
+  box-sizing: border-box;
+  width: 100%;
+  height: 500px;
+  padding: 24px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font: 14px/1.55 system-ui, sans-serif;
+  color: var(--st-text-color, #444);
+  background: var(--st-secondary-background-color, #f6f7f9);
+  border-radius: 8px;
+}
+"""
+
+NAVER_MAP_JS = """
+const componentStates = new WeakMap()
+
+function loadNaverMaps(clientId, onAuthFailure) {
+  window.navermap_authFailure = onAuthFailure
+
+  if (window.naver?.maps) return Promise.resolve()
+  if (window.__naverMapsSdkPromise) return window.__naverMapsSdkPromise
+
+  window.__naverMapsSdkPromise = new Promise((resolve, reject) => {
+    const sdk = document.createElement("script")
+    sdk.id = "naver-maps-sdk"
+    sdk.src = "https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=" +
+      encodeURIComponent(clientId)
+    sdk.async = true
+    sdk.onload = () => window.naver?.maps
+      ? resolve()
+      : reject(new Error("NAVER 지도 객체를 찾을 수 없습니다."))
+    sdk.onerror = () => reject(new Error("NAVER 지도 SDK 연결에 실패했습니다."))
+    document.head.appendChild(sdk)
+  })
+  return window.__naverMapsSdkPromise
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[char])
+}
+
+export default function (component) {
+  const { data, parentElement } = component
+  const mapElement = parentElement.querySelector(".map-root")
+  const statusElement = parentElement.querySelector(".map-status")
+  if (!mapElement || !statusElement) return
+
+  const showError = (message) => {
+    mapElement.style.display = "none"
+    statusElement.style.display = "flex"
+    statusElement.textContent = message
+  }
+
+  const previous = componentStates.get(parentElement)
+  if (previous?.map?.destroy) previous.map.destroy()
+
+  mapElement.style.display = "block"
+  statusElement.style.display = "none"
+
+  loadNaverMaps(data.clientId, () => showError(
+    "지도 인증에 실패했습니다. NAVER Cloud Maps의 Web 서비스 URL과 Client ID를 확인해 주세요."
+  )).then(() => {
+    const places = data.places || []
+    if (!places.length) return
+
+    const map = new naver.maps.Map(mapElement, {
+      center: new naver.maps.LatLng(places[0].lat, places[0].lng),
+      zoom: 14
+    })
+    const bounds = new naver.maps.LatLngBounds()
+
+    places.forEach((place) => {
+      const position = new naver.maps.LatLng(place.lat, place.lng)
+      const marker = new naver.maps.Marker({
+        position,
+        map,
+        title: place.title,
+        icon: {
+          content: `<div style="background:#03c75a;color:#fff;width:30px;height:30px;` +
+            `border-radius:50%;display:flex;align-items:center;justify-content:center;` +
+            `font-weight:700;border:2px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,.35)">` +
+            `${place.number}</div>`,
+          anchor: new naver.maps.Point(15, 15)
+        }
+      })
+      const infoWindow = new naver.maps.InfoWindow({
+        content: `<div style="padding:10px;min-width:180px;font-size:13px">` +
+          `<b>${place.number}. ${escapeHtml(place.title)}</b><br><br>` +
+          `${escapeHtml(place.address)}</div>`
+      })
+      naver.maps.Event.addListener(marker, "click", () => infoWindow.open(map, marker))
+      bounds.extend(position)
+    })
+
+    if (places.length > 1) {
+      map.fitBounds(bounds, {top: 50, right: 50, bottom: 50, left: 50})
+    }
+    componentStates.set(parentElement, {map})
+  }).catch((error) => showError(error.message))
+}
+"""
+
+NAVER_MAP_COMPONENT = st.components.v2.component(
+    "naver_dynamic_map",
+    html=NAVER_MAP_HTML,
+    css=NAVER_MAP_CSS,
+    js=NAVER_MAP_JS,
+    isolate_styles=False,
 )
 
 st.title("NAVER 지역검색", anchor=False)
@@ -100,7 +227,7 @@ def make_map_data(results: list[dict]) -> list[dict]:
 
 
 def show_naver_map(places: list[dict]) -> None:
-    """NAVER Web Dynamic Map을 격리된 iframe에 표시한다."""
+    """NAVER Web Dynamic Map을 Streamlit Custom Component v2로 표시한다."""
     if not places:
         st.info("표시할 수 있는 위치 좌표가 없습니다.", icon=":material/info:")
         return
@@ -111,114 +238,11 @@ def show_naver_map(places: list[dict]) -> None:
         st.warning(str(exc), icon=":material/key:")
         return
 
-    # JSON이 </script>를 조기에 닫지 못하도록 '<'를 유니코드 이스케이프로 바꾼다.
-    places_json = json.dumps(places, ensure_ascii=False).replace("<", "\\u003c")
-    client_id_json = json.dumps(map_client_id)
-    center_lat = places[0]["lat"]
-    center_lng = places[0]["lng"]
-
-    map_html = f"""
-      <style>
-        #naver-map {{ width: 100%; height: 500px; margin: 0; border-radius: 8px; overflow: hidden; }}
-        #naver-map-status {{
-          display: none; box-sizing: border-box; height: 500px; padding: 24px;
-          align-items: center; justify-content: center; text-align: center;
-          font: 14px/1.55 system-ui, sans-serif; color: #444; background: #f6f7f9;
-          border-radius: 8px;
-        }}
-      </style>
-      <div id="naver-map" role="img" aria-label="검색 결과 업체 위치를 표시하는 네이버 지도"></div>
-      <div id="naver-map-status" role="alert"></div>
-      <script>
-        const places = {places_json};
-        const clientId = {client_id_json};
-
-        function showError(message) {{
-          document.getElementById("naver-map").style.display = "none";
-          const status = document.getElementById("naver-map-status");
-          status.style.display = "flex";
-          status.textContent = message;
-        }}
-
-        // NAVER Maps가 인증 실패 시 호출하는 전역 콜백이다.
-        window.navermap_authFailure = function () {{
-          showError(
-            "지도 인증에 실패했습니다. NAVER Cloud Maps의 Web 서비스 URL에 " +
-            "현재 Streamlit 앱의 도메인만 등록했는지 확인해 주세요. 포트와 경로는 제외합니다."
-          );
-        }};
-
-        function escapeHtml(value) {{
-          return String(value).replace(/[&<>"']/g, function (char) {{
-            return {{"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}}[char];
-          }});
-        }}
-
-        function initNaverLocalMap() {{
-          if (!window.naver || !window.naver.maps) {{
-            showError("NAVER 지도 SDK를 불러오지 못했습니다.");
-            return;
-          }}
-
-          const map = new naver.maps.Map("naver-map", {{
-            center: new naver.maps.LatLng({center_lat}, {center_lng}),
-            zoom: 14
-          }});
-          const bounds = new naver.maps.LatLngBounds();
-
-          places.forEach(function (place) {{
-            const position = new naver.maps.LatLng(place.lat, place.lng);
-            const marker = new naver.maps.Marker({{
-              position,
-              map,
-              title: place.title,
-              icon: {{
-                content: `<div style="background:#03c75a;color:#fff;width:30px;height:30px;` +
-                  `border-radius:50%;display:flex;align-items:center;justify-content:center;` +
-                  `font-weight:700;border:2px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,.35)">` +
-                  `${{place.number}}</div>`,
-                anchor: new naver.maps.Point(15, 15)
-              }}
-            }});
-            const infoWindow = new naver.maps.InfoWindow({{
-              content: `<div style="padding:10px;min-width:180px;font-size:13px">` +
-                `<b>${{place.number}}. ${{escapeHtml(place.title)}}</b><br><br>` +
-                `${{escapeHtml(place.address)}}</div>`
-            }});
-            naver.maps.Event.addListener(marker, "click", function () {{
-              infoWindow.open(map, marker);
-            }});
-            bounds.extend(position);
-          }});
-
-          if (places.length > 1) {{
-            map.fitBounds(bounds, {{top: 50, right: 50, bottom: 50, left: 50}});
-          }}
-        }}
-
-        if (window.naver && window.naver.maps) {{
-          initNaverLocalMap();
-        }} else {{
-          window.initNaverLocalMap = initNaverLocalMap;
-          const oldSdk = document.getElementById("naver-maps-sdk");
-          if (oldSdk) oldSdk.remove();
-          const sdk = document.createElement("script");
-          sdk.id = "naver-maps-sdk";
-          sdk.src = "https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=" +
-            encodeURIComponent(clientId) + "&callback=initNaverLocalMap";
-          sdk.async = true;
-          sdk.onerror = function () {{
-            showError("NAVER 지도 SDK 연결에 실패했습니다. 네트워크와 지도 API 설정을 확인해 주세요.");
-          }};
-          document.head.appendChild(sdk);
-        }}
-      </script>
-    """
-
-    st.html(
-        map_html,
+    NAVER_MAP_COMPONENT(
+        data={"clientId": map_client_id, "places": places},
+        key="naver-local-map",
         width="stretch",
-        unsafe_allow_javascript=True,
+        height=500,
     )
 
 
